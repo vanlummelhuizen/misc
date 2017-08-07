@@ -5,6 +5,7 @@ TODO
 """
 
 import sys
+import os
 import getopt
 import re
 from filecollectionprocessing.fileprocessor import FileProcessor
@@ -14,10 +15,9 @@ from openpyxl import load_workbook
 class TrimbosAnonymizer(FileProcessor):
     _extensions = ["xml", "xls", "xlsx"]
 
-    def __init__(self, first_row, last_row, agent_column, prechat_column, body_column,
+    def __init__(self, first_row, agent_column, prechat_column, body_column,
                  names_file=None, organisations_file=None, places_file=None, words_and_names_file=None):
         self.first_row = first_row
-        self.last_row = last_row
         self.agent_column = agent_column
         self.prechat_column = prechat_column
         self.body_column = body_column
@@ -27,16 +27,15 @@ class TrimbosAnonymizer(FileProcessor):
                                 "organisation": organisations_file,
                                 "place": places_file}.items():
             if file_name is not None:
-                with open(file_name) as file:
+                with open(file_name, encoding='UTF-8') as file:
                     lines = file.readlines()
                     lines = [line.strip() for line in lines]
                     self.replace_lists[type] = lines
 
         self.words_and_names = []
         if words_and_names_file is not None:
-            with open(words_and_names_file) as words_and_names:
+            with open(words_and_names_file, encoding='UTF-8') as words_and_names:
                 self.words_and_names = [line.strip().lower() for line in words_and_names.readlines()]
-        print(len(self.words_and_names))
 
         self.agent_set = set([])
 
@@ -47,13 +46,16 @@ class TrimbosAnonymizer(FileProcessor):
         :param file_name:
         :return:
         """
+
+        file_basename = os.path.basename(file_name)
+
         # try:
         # Load the workbook
         workbook = load_workbook(filename=file_name)
         # Take the first worksheet
         worksheet = workbook[workbook.get_sheet_names()[0]]
 
-        for row_index in range(self.first_row, self.last_row+1):
+        for row_index in range(self.first_row, worksheet.max_row+1):
             # Agents
             agent = worksheet[self.agent_column+str(row_index)].value
             self.agent_set.add(agent)
@@ -62,11 +64,6 @@ class TrimbosAnonymizer(FileProcessor):
             # Prechat
             prechat = worksheet[self.prechat_column+str(row_index)].value
             prechat_lines = prechat.strip().split("\n")
-
-            # print([item.split(" = ") for item in prechat_lines])
-            # prechat_dict = dict(re.split(" = ?", item) for item in prechat_lines)
-            # print(prechat_dict["Naam"])
-            # print(prechat)
 
             prechat = re.sub(r'(Naam:? = ?)[^\n]*(\n)', r'\1[name]\2', prechat)
             prechat = re.sub(r'(Woonplaats:? = ?)[^\n]*(\n)', r'\1[place]\2', prechat)
@@ -89,7 +86,7 @@ class TrimbosAnonymizer(FileProcessor):
 
             worksheet[self.body_column + str(row_index)] = body
 
-        workbook.save(file_name + "_NEW.xlsx")
+        workbook.save(self.output_dir + os.sep + file_basename)
 
         # except Exception as exception:
         #     print(exception)
@@ -97,16 +94,11 @@ class TrimbosAnonymizer(FileProcessor):
     def replace_using_list_items(self, text):
         for type, list in self.replace_lists.items():
             for item in list:
-                print("Item: " + item)
-                print("item.lower(): " + item.lower())
-                print("In words_and_names: " + str(item.lower() in self.words_and_names))
                 if len(item) < 5 or item.lower() in self.words_and_names:
                     # Strict: NOT ignoring case
-                    print("Strict: " + item)
                     text = re.sub(r'\b' + re.sub(r'\\ ', '\s+', re.escape(item)) + r'\b', "[%s]" % type, text)
                 else:
                     # Not strict: ignoring case
-                    print("Not strict: " + item)
                     text = re.sub(r'\b' + re.sub(r'\\ ', '\s+', re.escape(item)) + r'\b', "[%s]" % type, text,
                                   flags=re.I)
         return text
@@ -159,7 +151,7 @@ if __name__ == "__main__":
         print("Errors:")
         print("\n".join(errors))
         print(usage)
-        exit(1)
+        sys.exit(1)
 
     # Report registered options
     print("OPTIONS", file=sys.stderr)
@@ -173,7 +165,7 @@ if __name__ == "__main__":
 
     # Build and run
     file_collection_processor = FileCollectionProcessor(file_list, output_dir=output_dir, extensions_to_process=["xlsx"])
-    trimbosAnonymizer = TrimbosAnonymizer(13, 25, "D", "W", "Y", names_file=names_file,
+    trimbosAnonymizer = TrimbosAnonymizer(13, "D", "W", "Y", names_file=names_file,
                                           organisations_file=organisations_file, places_file=places_file,
                                           words_and_names_file=words_and_names_file)
     file_collection_processor.add_file_processor(trimbosAnonymizer)
