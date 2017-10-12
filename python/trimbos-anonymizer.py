@@ -14,6 +14,7 @@ from openpyxl import load_workbook
 
 class TrimbosAnonymizer(FileProcessor):
     _extensions = ["xml", "xls", "xlsx"]
+    _agent_ids_csv = 'agent_id.csv'
 
     def __init__(self, first_row, agent_column, prechat_column, body_column,
                  names_file=None, organisations_file=None, places_file=None, words_and_names_file=None):
@@ -37,7 +38,8 @@ class TrimbosAnonymizer(FileProcessor):
             with open(words_and_names_file, encoding='UTF-8') as words_and_names:
                 self.words_and_names = [line.strip().lower() for line in words_and_names.readlines()]
 
-        self.agent_set = set([])
+        self.agent_dict = dict()
+        self.agent_index = 0
 
     def process_file(self, file_name):
         """
@@ -56,40 +58,77 @@ class TrimbosAnonymizer(FileProcessor):
         worksheet = workbook[workbook.get_sheet_names()[0]]
 
         for row_index in range(self.first_row, worksheet.max_row+1):
-            # Agents
-            agent = worksheet[self.agent_column+str(row_index)].value
-            self.agent_set.add(agent)
-            worksheet[self.agent_column + str(row_index)] = "[name]"
+            try:
+                # Agents
+                agent = worksheet[self.agent_column+str(row_index)].value
+                agent_name = ''
+                agent_id = 'agent'
+                if isinstance(agent, str):
+                    agent_name = agent.capitalize()
+                    agent_id = self.get_agent_id(agent_name)
+                    worksheet[self.agent_column + str(row_index)] = "[" + agent_id + "]"
 
-            # Prechat
-            prechat = worksheet[self.prechat_column+str(row_index)].value
-            prechat_lines = prechat.strip().split("\n")
+                # Prechat
+                prechat = worksheet[self.prechat_column+str(row_index)].value
+                user = ''
+                if isinstance(prechat, str):
 
-            prechat = re.sub(r'(Naam:? = ?)[^\n]*(\n)', r'\1[name]\2', prechat)
-            prechat = re.sub(r'(Woonplaats:? = ?)[^\n]*(\n)', r'\1[place]\2', prechat)
-            prechat = re.sub(r'\d{4}[ \t]*[A-Za-z]{2}\b', '[zipcode]', prechat)
-            prechat = self.replace_using_list_items(prechat)
-            prechat = self.replace_email_address(prechat)
-            prechat = self.replace_url(prechat)
-            prechat = self.replace_acronyms(prechat)
-            worksheet[self.prechat_column + str(row_index)] = prechat
+                    result = re.search(r'Naam:? = ?([^\n]*)\n', prechat)
+                    if result:
+                        user = result.group(1)
 
-            # Body
-            body = worksheet[self.body_column+str(row_index)].value
-            body = re.sub(r'(\] )\w+(:)', r'\1[name]\2', body)
-            body = re.sub(r'\d{4}[ \t]*[A-Za-z]{2}\b', '[zipcode]', body)
+                    prechat = re.sub(r'(Naam:? = ?)[^\n]*(\n)', r'\1[name]\2', prechat)
+                    prechat = re.sub(r'(Woonplaats:? = ?)[^\n]*(\n)', r'\1[place]\2', prechat)
+                    prechat = re.sub(r'\d{4}[ \t]*[A-Za-z]{2}\b', '[zipcode]', prechat)
+                    prechat = self.replace_using_list_items(prechat)
+                    prechat = self.replace_email_address(prechat)
+                    prechat = self.replace_url(prechat)
+                    prechat = self.replace_acronyms(prechat)
+                    worksheet[self.prechat_column + str(row_index)] = prechat
 
-            body = self.replace_using_list_items(body)
-            body = self.replace_email_address(body)
-            body = self.replace_url(body)
-            body = self.replace_acronyms(body)
+                if user is not '' and user == agent_name:
+                    print("Warning: agent name and user name are equal (%s)." % agent_name)
 
-            worksheet[self.body_column + str(row_index)] = body
+                # Body
+                body = worksheet[self.body_column+str(row_index)].value
+                if isinstance(body, str):
+                    if user != agent_name:
+                        body = re.sub(r'(\] )' + agent_name + r'(:)', r'\1[' + agent_id + r']\2', body)
+                        body = re.sub(r'(\] )(?!' + agent_id + r')\w+(:)', r'\1[name]\2', body)
+                    else:
+                        body = re.sub(r'(\] )\w+(:)', r'\1[name]\2', body)
+                    body = re.sub(r'\d{4}[ \t]*[A-Za-z]{2}\b', '[zipcode]', body)
+
+                    body = self.replace_using_list_items(body)
+                    body = self.replace_email_address(body)
+                    body = self.replace_url(body)
+                    body = self.replace_acronyms(body)
+
+                    worksheet[self.body_column + str(row_index)] = body
+
+            except Exception:
+                print("Unable to process row " + str(row_index) + ". Error message: " + sys.exc_info())
 
         workbook.save(self.output_dir + os.sep + file_basename)
+        self.save_agent_ids()
 
         # except Exception as exception:
         #     print(exception)
+
+    def get_agent_id(self, name):
+        if name in self.agent_dict:
+            return self.agent_dict[name]
+        else:
+            self.agent_index += 1
+            agent_id = 'agent' + str(self.agent_index)
+            self.agent_dict[name] = agent_id
+            return agent_id
+
+    def save_agent_ids(self):
+        with open(self.output_dir + os.sep + self._agent_ids_csv, 'w') as agent_ids_file:
+            for k,v in self.agent_dict.items():
+                agent_ids_file.write("\"%s\",\"%s\"\n" % (k,v))
+
 
     def replace_using_list_items(self, text):
         for type, list in self.replace_lists.items():
